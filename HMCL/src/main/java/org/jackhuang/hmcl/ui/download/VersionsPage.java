@@ -24,7 +24,9 @@ import javafx.beans.property.SimpleObjectProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.control.*;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.*;
@@ -36,12 +38,13 @@ import org.jackhuang.hmcl.download.fabric.FabricAPIRemoteVersion;
 import org.jackhuang.hmcl.download.fabric.FabricRemoteVersion;
 import org.jackhuang.hmcl.download.forge.ForgeRemoteVersion;
 import org.jackhuang.hmcl.download.game.GameRemoteVersion;
+import org.jackhuang.hmcl.download.legacyfabric.LegacyFabricAPIRemoteVersion;
+import org.jackhuang.hmcl.download.legacyfabric.LegacyFabricRemoteVersion;
 import org.jackhuang.hmcl.download.liteloader.LiteLoaderRemoteVersion;
 import org.jackhuang.hmcl.download.neoforge.NeoForgeRemoteVersion;
 import org.jackhuang.hmcl.download.optifine.OptiFineRemoteVersion;
 import org.jackhuang.hmcl.download.quilt.QuiltAPIRemoteVersion;
 import org.jackhuang.hmcl.download.quilt.QuiltRemoteVersion;
-import org.jackhuang.hmcl.setting.Theme;
 import org.jackhuang.hmcl.setting.VersionIconType;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.task.Task;
@@ -49,41 +52,51 @@ import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.SVG;
 import org.jackhuang.hmcl.ui.animation.ContainerAnimations;
 import org.jackhuang.hmcl.ui.animation.TransitionPane;
-import org.jackhuang.hmcl.ui.construct.*;
+import org.jackhuang.hmcl.ui.construct.ComponentList;
+import org.jackhuang.hmcl.ui.construct.RipplerContainer;
+import org.jackhuang.hmcl.ui.construct.SpinnerPane;
+import org.jackhuang.hmcl.ui.construct.TwoLineListItem;
 import org.jackhuang.hmcl.ui.wizard.Navigation;
 import org.jackhuang.hmcl.ui.wizard.Refreshable;
 import org.jackhuang.hmcl.ui.wizard.WizardPage;
-import org.jackhuang.hmcl.util.Holder;
+import org.jackhuang.hmcl.util.NativePatcher;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.i18n.I18n;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.Platform;
 import org.jackhuang.hmcl.util.versioning.GameVersionNumber;
 
 import java.util.Locale;
-import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.jackhuang.hmcl.ui.FXUtils.*;
-import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public final class VersionsPage extends Control implements WizardPage, Refreshable {
     private final String gameVersion;
     private final String libraryId;
     private final String title;
     private final Navigation navigation;
+    private final DownloadProvider downloadProvider;
     private final VersionList<?> versionList;
     private final Runnable callback;
 
     private final ObservableList<RemoteVersion> versions = FXCollections.observableArrayList();
     private final ObjectProperty<Status> status = new SimpleObjectProperty<>(Status.LOADING);
 
-    public VersionsPage(Navigation navigation, String title, String gameVersion, DownloadProvider downloadProvider, String libraryId, Runnable callback) {
+    public VersionsPage(Navigation navigation,
+                        String title, String gameVersion,
+                        DownloadProvider downloadProvider,
+                        String libraryId,
+                        Runnable callback) {
         this.title = title;
         this.gameVersion = gameVersion;
         this.libraryId = libraryId;
         this.navigation = navigation;
+        this.downloadProvider = downloadProvider;
         this.versionList = downloadProvider.getVersionListById(libraryId);
         this.callback = callback;
 
@@ -117,21 +130,12 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
         return title;
     }
 
-    @Override
-    public void cleanup(Map<String, Object> settings) {
-        settings.remove(libraryId);
-    }
-
     private void onRefresh() {
         refresh();
     }
 
     private void onBack() {
         navigation.onPrev(true);
-    }
-
-    private void onSponsor() {
-        FXUtils.openLink("https://bmclapidoc.bangbang93.com");
     }
 
     private enum Status {
@@ -149,32 +153,65 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
     }
 
     private static class RemoteVersionListCell extends ListCell<RemoteVersion> {
-        private final IconedTwoLineListItem content = new IconedTwoLineListItem();
-        private final RipplerContainer ripplerContainer = new RipplerContainer(content);
+        private final VersionsPage control;
+
+        private final TwoLineListItem twoLineListItem = new TwoLineListItem();
+        private final ImageView imageView = new ImageView();
         private final StackPane pane = new StackPane();
 
-        private final Holder<RemoteVersionListCell> lastCell;
+        RemoteVersionListCell(VersionsPage control) {
+            this.control = control;
 
-        RemoteVersionListCell(Holder<RemoteVersionListCell> lastCell, String libraryId) {
-            this.lastCell = lastCell;
-            if ("game".equals(libraryId)) {
-                content.getExternalLinkButton().setGraphic(SVG.GLOBE_BOOK.createIcon(Theme.blackFill(), -1));
-                FXUtils.installFastTooltip(content.getExternalLinkButton(), i18n("wiki.tooltip"));
+            imageView.setMouseTransparent(true);
+
+            HBox hbox = new HBox(16);
+            HBox.setHgrow(twoLineListItem, Priority.ALWAYS);
+            hbox.setAlignment(Pos.CENTER);
+
+            HBox actions = new HBox(8);
+            actions.setAlignment(Pos.CENTER);
+            {
+                if ("game".equals(control.libraryId)) {
+                    JFXButton wikiButton = newToggleButton4(SVG.GLOBE_BOOK);
+                    wikiButton.setOnAction(event -> onOpenWiki());
+                    FXUtils.installFastTooltip(wikiButton, i18n("wiki.tooltip"));
+                    actions.getChildren().add(wikiButton);
+                }
+
+                JFXButton actionButton = newToggleButton4(SVG.ARROW_FORWARD);
+                actionButton.setOnAction(e -> onAction());
+                actions.getChildren().add(actionButton);
             }
 
+            hbox.getChildren().setAll(imageView, twoLineListItem, actions);
+
             pane.getStyleClass().add("md-list-cell");
-            StackPane.setMargin(content, new Insets(10, 16, 10, 16));
-            pane.getChildren().setAll(ripplerContainer);
+            StackPane.setMargin(hbox, new Insets(10, 16, 10, 16));
+            pane.getChildren().setAll(new RipplerContainer(hbox));
+
+            FXUtils.onClicked(this, this::onAction);
+        }
+
+        private void onAction() {
+            RemoteVersion item = getItem();
+            if (item == null)
+                return;
+
+            control.navigation.getSettings().put(control.libraryId, item);
+            control.callback.run();
+        }
+
+        private void onOpenWiki() {
+            RemoteVersion item = getItem();
+            if (!(item instanceof GameRemoteVersion))
+                return;
+
+            FXUtils.openLink(I18n.getWikiLink((GameRemoteVersion) item));
         }
 
         @Override
         public void updateItem(RemoteVersion remoteVersion, boolean empty) {
             super.updateItem(remoteVersion, empty);
-
-            // https://mail.openjdk.org/pipermail/openjfx-dev/2022-July/034764.html
-            if (this == lastCell.value && !isVisible())
-                return;
-            lastCell.value = this;
 
             if (empty) {
                 setGraphic(null);
@@ -182,37 +219,43 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
             }
             setGraphic(pane);
 
-            content.setTitle(I18n.getDisplaySelfVersion(remoteVersion));
+            twoLineListItem.setTitle(I18n.getDisplayVersion(remoteVersion));
             if (remoteVersion.getReleaseDate() != null) {
-                content.setSubtitle(I18n.formatDateTime(remoteVersion.getReleaseDate()));
+                twoLineListItem.setSubtitle(I18n.formatDateTime(remoteVersion.getReleaseDate()));
             } else {
-                content.setSubtitle(null);
+                twoLineListItem.setSubtitle(null);
             }
+            twoLineListItem.getTags().clear();
 
             if (remoteVersion instanceof GameRemoteVersion) {
                 RemoteVersion.Type versionType = remoteVersion.getVersionType();
+                GameVersionNumber gameVersion = GameVersionNumber.asGameVersion(remoteVersion.getGameVersion());
+
                 switch (versionType) {
-                    case RELEASE:
-                        content.getTags().setAll(i18n("version.game.release"));
-                        content.setImage(VersionIconType.GRASS.getIcon());
-                        break;
-                    case PENDING:
-                    case SNAPSHOT:
+                    case RELEASE -> {
+                        twoLineListItem.addTag(i18n("version.game.release"));
+                        imageView.setImage(VersionIconType.GRASS.getIcon());
+                    }
+                    case SNAPSHOT, PENDING, UNOBFUSCATED -> {
                         if (versionType == RemoteVersion.Type.SNAPSHOT
                                 && GameVersionNumber.asGameVersion(remoteVersion.getGameVersion()).isAprilFools()) {
-                            content.getTags().setAll(i18n("version.game.april_fools"));
-                            content.setImage(VersionIconType.APRIL_FOOLS.getIcon());
+                            twoLineListItem.addTag(i18n("version.game.april_fools"));
+                            imageView.setImage(VersionIconType.APRIL_FOOLS.getIcon());
                         } else {
-                            content.getTags().setAll(i18n("version.game.snapshot"));
-                            content.setImage(VersionIconType.COMMAND.getIcon());
+                            twoLineListItem.addTag(i18n("version.game.snapshot"));
+                            imageView.setImage(VersionIconType.COMMAND.getIcon());
                         }
-                        break;
-                    default:
-                        content.getTags().setAll(i18n("version.game.old"));
-                        content.setImage(VersionIconType.CRAFT_TABLE.getIcon());
-                        break;
+                    }
+                    default -> {
+                        twoLineListItem.addTag(i18n("version.game.old"));
+                        imageView.setImage(VersionIconType.CRAFT_TABLE.getIcon());
+                    }
                 }
-                content.setExternalLink(I18n.getWikiLink((GameRemoteVersion) remoteVersion));
+
+                switch (NativePatcher.checkSupportedStatus(gameVersion, Platform.SYSTEM_PLATFORM, OperatingSystem.SYSTEM_VERSION)) {
+                    case UNTESTED -> twoLineListItem.addTagWarning(i18n("version.game.support_status.untested"));
+                    case UNSUPPORTED -> twoLineListItem.addTagWarning(i18n("version.game.support_status.unsupported"));
+                }
             } else {
                 VersionIconType iconType;
                 if (remoteVersion instanceof LiteLoaderRemoteVersion)
@@ -225,19 +268,20 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
                     iconType = VersionIconType.CLEANROOM;
                 else if (remoteVersion instanceof NeoForgeRemoteVersion)
                     iconType = VersionIconType.NEO_FORGE;
+                else if (remoteVersion instanceof LegacyFabricRemoteVersion || remoteVersion instanceof LegacyFabricAPIRemoteVersion)
+                    iconType = VersionIconType.LEGACY_FABRIC;
                 else if (remoteVersion instanceof FabricRemoteVersion || remoteVersion instanceof FabricAPIRemoteVersion)
                     iconType = VersionIconType.FABRIC;
                 else if (remoteVersion instanceof QuiltRemoteVersion || remoteVersion instanceof QuiltAPIRemoteVersion)
                     iconType = VersionIconType.QUILT;
                 else
-                    iconType = null;
+                    iconType = VersionIconType.COMMAND;
 
-                content.setImage(iconType != null ? iconType.getIcon() : null);
-                if (content.getSubtitle() == null)
-                    content.setSubtitle(remoteVersion.getGameVersion());
+                imageView.setImage(iconType.getIcon());
+                if (twoLineListItem.getSubtitle() == null)
+                    twoLineListItem.setSubtitle(remoteVersion.getGameVersion());
                 else
-                    content.getTags().setAll(remoteVersion.getGameVersion());
-                content.setExternalLink(null);
+                    twoLineListItem.addTag(remoteVersion.getGameVersion());
             }
         }
     }
@@ -321,18 +365,6 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
                         );
                     }
                 }
-//                {
-//                    HBox actionsBox = new HBox(8);
-//                    GridPane.setColumnSpan(actionsBox, 4);
-//                    actionsBox.setAlignment(Pos.CENTER_RIGHT);
-//
-//                    JFXButton refreshButton = FXUtils.newRaisedButton(i18n("button.refresh"));
-//                    refreshButton.setOnAction(event -> control.onRefresh());
-//
-//                    actionsBox.getChildren().setAll(refreshButton);
-//
-//                    searchPane.addRow(rowIndex++, actionsBox);
-//                }
             }
 
             {
@@ -354,15 +386,7 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
 
                         control.versions.addListener((InvalidationListener) o -> updateList());
 
-                        Holder<RemoteVersionListCell> lastCell = new Holder<>();
-                        list.setCellFactory(listView -> new RemoteVersionListCell(lastCell, control.libraryId));
-
-                        FXUtils.onClicked(list, () -> {
-                            if (list.getSelectionModel().getSelectedIndex() < 0)
-                                return;
-                            control.navigation.getSettings().put(control.libraryId, list.getSelectionModel().getSelectedItem());
-                            control.callback.run();
-                        });
+                        list.setCellFactory(listView -> new RemoteVersionListCell(control));
 
                         ComponentList.setVgrow(list, Priority.ALWAYS);
 
@@ -415,21 +439,17 @@ public final class VersionsPage extends Control implements WizardPage, Refreshab
             if (filter != null)
                 versions = versions.filter(it -> {
                     RemoteVersion.Type versionType = it.getVersionType();
-                    switch (filter) {
-                        case RELEASE:
-                            return versionType == RemoteVersion.Type.RELEASE;
-                        case SNAPSHOTS:
-                            return versionType == RemoteVersion.Type.SNAPSHOT
-                                    || versionType == RemoteVersion.Type.PENDING;
-                        case APRIL_FOOLS:
-                            return versionType == RemoteVersion.Type.SNAPSHOT
-                                    && GameVersionNumber.asGameVersion(it.getGameVersion()).isAprilFools();
-                        case OLD:
-                            return versionType == RemoteVersion.Type.OLD;
-                        case ALL:
-                        default:
-                            return true;
-                    }
+                    return switch (filter) {
+                        case RELEASE -> versionType == RemoteVersion.Type.RELEASE;
+                        case SNAPSHOTS -> versionType == RemoteVersion.Type.SNAPSHOT
+                                || versionType == RemoteVersion.Type.PENDING
+                                || versionType == RemoteVersion.Type.UNOBFUSCATED;
+                        case APRIL_FOOLS -> versionType == RemoteVersion.Type.SNAPSHOT
+                                && GameVersionNumber.asGameVersion(it.getGameVersion()).isAprilFools();
+                        case OLD -> versionType == RemoteVersion.Type.OLD;
+                        // case ALL,
+                        default -> true;
+                    };
                 });
 
             String nameQuery = nameField.getText();

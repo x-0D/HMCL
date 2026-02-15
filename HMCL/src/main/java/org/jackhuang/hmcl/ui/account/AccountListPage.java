@@ -17,9 +17,9 @@
  */
 package org.jackhuang.hmcl.ui.account;
 
-import com.jfoenix.controls.JFXButton;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.*;
+import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -32,7 +32,6 @@ import javafx.scene.layout.VBox;
 import org.jackhuang.hmcl.auth.Account;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorServer;
 import org.jackhuang.hmcl.setting.Accounts;
-import org.jackhuang.hmcl.setting.Theme;
 import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.SVG;
@@ -40,24 +39,66 @@ import org.jackhuang.hmcl.ui.construct.AdvancedListItem;
 import org.jackhuang.hmcl.ui.construct.ClassTitle;
 import org.jackhuang.hmcl.ui.decorator.DecoratorAnimatedPage;
 import org.jackhuang.hmcl.ui.decorator.DecoratorPage;
+import org.jackhuang.hmcl.util.i18n.LocaleUtils;
 import org.jackhuang.hmcl.util.io.NetworkUtils;
 import org.jackhuang.hmcl.util.javafx.BindingMapping;
 import org.jackhuang.hmcl.util.javafx.MappedObservableList;
 
 import java.util.Locale;
 
+import static org.jackhuang.hmcl.setting.ConfigHolder.globalConfig;
 import static org.jackhuang.hmcl.ui.versions.VersionPage.wrap;
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 import static org.jackhuang.hmcl.util.javafx.ExtendedProperties.createSelectedItemPropertyFor;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public final class AccountListPage extends DecoratorAnimatedPage implements DecoratorPage {
     static final BooleanProperty RESTRICTED = new SimpleBooleanProperty(true);
 
+    private static boolean isExemptedRegion() {
+        String zoneId = ZoneId.systemDefault().getId();
+        if (Arrays.asList(
+                "Asia/Shanghai",
+                // Although Asia/Beijing is not a legal name, Deepin uses it
+                "Asia/Beijing",
+                "Asia/Chongqing",
+                "Asia/Chungking",
+                "Asia/Harbin"
+        ).contains(zoneId))
+            return true;
+
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS && NativeUtils.USE_JNA) {
+            Kernel32 kernel32 = Kernel32.INSTANCE;
+
+            // https://learn.microsoft.com/windows/win32/intl/table-of-geographical-locations
+            if (kernel32 != null && kernel32.GetUserGeoID(WinConstants.GEOCLASS_NATION) == 45) // China
+                return true;
+        } else if (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX && "GMT+08:00".equals(zoneId))
+            // Some Linux distributions may use invalid time zone ids (e.g., Asia/Beijing)
+            // Java may not be able to resolve this name and use GMT+08:00 instead.
+            return true;
+
+        return false;
+    }
 
     static {
-        // Always allow offline accounts - removed restriction
-        RESTRICTED.set(false);
+        String property = System.getProperty("hmcl.offline.auth.restricted", "auto");
+
+        if ("false".equals(property)
+                || "auto".equals(property) && isExemptedRegion()
+                || globalConfig().isEnableOfflineAccount())
+            RESTRICTED.set(false);
+        else
+            globalConfig().enableOfflineAccountProperty().addListener(new ChangeListener<Boolean>() {
+                @Override
+                public void changed(ObservableValue<? extends Boolean> o, Boolean oldValue, Boolean newValue) {
+                    if (newValue) {
+                        globalConfig().enableOfflineAccountProperty().removeListener(this);
+                        RESTRICTED.set(false);
+                    }
+                }
+            });
     }
 
     private final ObservableList<AccountListItem> items;
@@ -108,35 +149,25 @@ public final class AccountListPage extends DecoratorAnimatedPage implements Deco
 
                     AdvancedListItem microsoftItem = new AdvancedListItem();
                     microsoftItem.getStyleClass().add("navigation-drawer-item");
-                    microsoftItem.setActionButtonVisible(false);
                     microsoftItem.setTitle(i18n("account.methods.microsoft"));
-                    microsoftItem.setLeftGraphic(wrap(SVG.MICROSOFT));
-                    microsoftItem.setOnAction(e -> Controllers.dialog(new CreateAccountPane(Accounts.FACTORY_MICROSOFT)));
+                    microsoftItem.setLeftIcon(SVG.MICROSOFT);
+                    microsoftItem.setOnAction(e -> Controllers.dialog(new MicrosoftAccountLoginPane()));
 
                     AdvancedListItem offlineItem = new AdvancedListItem();
                     offlineItem.getStyleClass().add("navigation-drawer-item");
-                    offlineItem.setActionButtonVisible(false);
                     offlineItem.setTitle(i18n("account.methods.offline"));
-                    offlineItem.setLeftGraphic(wrap(SVG.PERSON));
+                    offlineItem.setLeftIcon(SVG.PERSON);
                     offlineItem.setOnAction(e -> Controllers.dialog(new CreateAccountPane(Accounts.FACTORY_OFFLINE)));
 
                     VBox boxAuthServers = new VBox();
                     authServerItems = MappedObservableList.create(skinnable.authServersProperty(), server -> {
                         AdvancedListItem item = new AdvancedListItem();
                         item.getStyleClass().add("navigation-drawer-item");
-                        item.setLeftGraphic(wrap(SVG.DRESSER));
+                        item.setLeftIcon(SVG.DRESSER);
                         item.setOnAction(e -> Controllers.dialog(new CreateAccountPane(server)));
-
-                        JFXButton btnRemove = new JFXButton();
-                        btnRemove.setOnAction(e -> {
-                            Controllers.confirm(i18n("button.remove.confirm"), i18n("button.remove"), () -> {
-                                skinnable.authServersProperty().remove(server);
-                            }, null);
-                            e.consume();
-                        });
-                        btnRemove.getStyleClass().add("toggle-icon4");
-                        btnRemove.setGraphic(SVG.CLOSE.createIcon(Theme.blackFill(), 14));
-                        item.setRightGraphic(btnRemove);
+                        item.setRightAction(SVG.CLOSE, () -> Controllers.confirm(i18n("button.remove.confirm"), i18n("button.remove"), () -> {
+                            skinnable.authServersProperty().remove(server);
+                        }, null));
 
                         ObservableValue<String> title = BindingMapping.of(server, AuthlibInjectorServer::getName);
                         item.titleProperty().bind(title);
@@ -165,8 +196,7 @@ public final class AccountListPage extends DecoratorAnimatedPage implements Deco
                     addAuthServerItem.getStyleClass().add("navigation-drawer-item");
                     addAuthServerItem.setTitle(i18n("account.injector.add"));
                     addAuthServerItem.setSubtitle(i18n("account.methods.authlib_injector"));
-                    addAuthServerItem.setActionButtonVisible(false);
-                    addAuthServerItem.setLeftGraphic(wrap(SVG.ADD_CIRCLE));
+                    addAuthServerItem.setLeftIcon(SVG.ADD_CIRCLE);
                     addAuthServerItem.setOnAction(e -> Controllers.dialog(new AddAuthlibInjectorServerPane()));
                     VBox.setMargin(addAuthServerItem, new Insets(0, 0, 12, 0));
                 }
