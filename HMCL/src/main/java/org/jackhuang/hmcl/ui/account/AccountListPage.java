@@ -18,7 +18,13 @@
 package org.jackhuang.hmcl.ui.account;
 
 import javafx.beans.binding.Bindings;
-import javafx.beans.property.*;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.ListProperty;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleListProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
@@ -56,37 +62,11 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 public final class AccountListPage extends DecoratorAnimatedPage implements DecoratorPage {
     static final BooleanProperty RESTRICTED = new SimpleBooleanProperty(true);
 
-    private static boolean isExemptedRegion() {
-        String zoneId = ZoneId.systemDefault().getId();
-        if (Arrays.asList(
-                "Asia/Shanghai",
-                // Although Asia/Beijing is not a legal name, Deepin uses it
-                "Asia/Beijing",
-                "Asia/Chongqing",
-                "Asia/Chungking",
-                "Asia/Harbin"
-        ).contains(zoneId))
-            return true;
-
-        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS && NativeUtils.USE_JNA) {
-            Kernel32 kernel32 = Kernel32.INSTANCE;
-
-            // https://learn.microsoft.com/windows/win32/intl/table-of-geographical-locations
-            if (kernel32 != null && kernel32.GetUserGeoID(WinConstants.GEOCLASS_NATION) == 45) // China
-                return true;
-        } else if (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX && "GMT+08:00".equals(zoneId))
-            // Some Linux distributions may use invalid time zone ids (e.g., Asia/Beijing)
-            // Java may not be able to resolve this name and use GMT+08:00 instead.
-            return true;
-
-        return false;
-    }
-
     static {
         String property = System.getProperty("hmcl.offline.auth.restricted", "auto");
 
         if ("false".equals(property)
-                || "auto".equals(property) && isExemptedRegion()
+                || "auto".equals(property) && LocaleUtils.IS_CHINA_MAINLAND
                 || globalConfig().isEnableOfflineAccount())
             RESTRICTED.set(false);
         else
